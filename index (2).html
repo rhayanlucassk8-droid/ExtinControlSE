@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExtinControl | Gestão Avançada</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://unpkg.com/prop-types@15.7.2/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #0f172a; }
+        .glass-card { background: white; border: 1px solid #e2e8f0; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .modal-overlay { animation: fadeIn 0.2s ease-out forwards; backdrop-filter: blur(4px); }
+        .modal-content { animation: slideUp 0.3s ease-out forwards; }
+        .animate-fadeIn { animation: fadeIn 0.3s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, createContext, useContext, useCallback, useRef } = React;
+        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip: RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } = window.Recharts;
+
+        const CRS = ['CR 01 - SERRANA', 'CR-02 BH', 'CR-03 SP', 'CR-04 RJ'];
+        
+        const MOCK_EXTINTORES = [
+            { id: 'ext1', numExtintor: '0407', numCilindro: '002773', tipo: 'ABC', peso: '4KG', vencimento: '2026-10-31', status: 'INSTALADO', cr: 'CR 01 - SERRANA' },
+            { id: 'ext2', numExtintor: '0358', numCilindro: '018420', tipo: 'ABC', peso: '6KG', vencimento: '2026-08-20', status: 'INSTALADO', cr: 'CR 01 - SERRANA' },
+            { id: 'ext3', numExtintor: '0999', numCilindro: '555555', tipo: 'ABC', peso: '4KG', vencimento: '2027-01-10', status: 'DISPONIVEL', cr: 'CR 01 - SERRANA' },
+            { id: 'ext4', numExtintor: '1001', numCilindro: '777777', tipo: 'ABC', peso: '6KG', vencimento: '2025-12-01', status: 'MANUTENCAO', cr: 'CR-02 BH' }
+        ];
+
+        const MOCK_VEICULOS = [
+            { id: 'v1', prefixo: '15129', placa: 'OYJ-9780', tipoFrota: 'CONVENCIONAL', cr: 'CR 01 - SERRANA', status: 'OPERACIONAL', extintorId: 'ext1' },
+            { id: 'v2', prefixo: '15130', placa: 'OYJ-9778', tipoFrota: 'CAMINHÃO', cr: 'CR 01 - SERRANA', status: 'OPERACIONAL', extintorId: 'ext2' },
+            { id: 'v3', prefixo: '10001', placa: 'ABC-1234', tipoFrota: 'VAN', cr: 'CR-02 BH', status: 'OPERACIONAL', extintorId: null }
+        ];
+
+        // Hook customizado para gerenciar LocalStorage
+        function useLocalStorage(key, initialValue) {
+            const [storedValue, setStoredValue] = useState(() => {
+                try {
+                    const item = window.localStorage.getItem(key);
+                    return item ? JSON.parse(item) : initialValue;
+                } catch (error) {
+                    console.error("Erro ao ler localStorage", error);
+                    return initialValue;
+                }
+            });
+
+            const setValue = (value) => {
+                try {
+                    const valueToStore = value instanceof Function ? value(storedValue) : value;
+                    setStoredValue(valueToStore);
+                    window.localStorage.setItem(key, JSON.stringify(valueToStore));
+                } catch (error) {
+                    console.error("Erro ao salvar no localStorage", error);
+                }
+            };
+
+            return [storedValue, setValue];
+        }
+
+        function LucideIcon({ name, className }) {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current) {
+                    iconRef.current.innerHTML = `<i data-lucide="${name}" class="${className || ''}"></i>`;
+                    window.lucide.createIcons({ root: iconRef.current });
+                }
+            }, [name, className]);
+            return <span ref={iconRef} className={`inline-flex items-center justify-center shrink-0 ${className}`} />;
+        }
+
+        const AppContext = createContext({});
+
+        function AppProvider({ children }) {
+            const [extintores, setExtintores] = useLocalStorage('@ExtinControl:extintores', MOCK_EXTINTORES);
+            const [veiculos, setVeiculos] = useLocalStorage('@ExtinControl:veiculos', MOCK_VEICULOS);
+            const [logs, setLogs] = useLocalStorage('@ExtinControl:logs', [{ id: 'l1', data: new Date().toISOString(), descricao: 'Sistema inicializado.', tipo: 'SISTEMA' }]);
+            const [inspecoes, setInspecoes] = useLocalStorage('@ExtinControl:inspecoes', []);
+            
+            const [notification, setNotification] = useState(null);
+            const [modalState, setModalState] = useState({ type: null, data: null });
+
+            const notify = useCallback((msg, type = 'success') => {
+                setNotification({ msg, type });
+                setTimeout(() => setNotification(null), 4000);
+            }, []);
+
+            const addLog = useCallback((descricao, tipo = 'INFO') => {
+                setLogs(prev => [{ id: Date.now().toString(), data: new Date().toISOString(), descricao, tipo }, ...prev].slice(0, 500)); 
+            }, [setLogs]);
+
+            const openModal = useCallback((type, data = null) => setModalState({ type, data }), []);
+            const closeModal = useCallback(() => setModalState({ type: null, data: null }), []);
+
+            const actions = {
+                trocarExtintor: (veiculoId, oldExtintorId, actionForOld, newExtintorId) => {
+                    let updatedExtintores = [...extintores];
+                    if (oldExtintorId && actionForOld) {
+                        updatedExtintores = updatedExtintores.map(ext => ext.id === oldExtintorId ? { ...ext, status: actionForOld } : ext);
+                    }
+                    if (newExtintorId) {
+                        updatedExtintores = updatedExtintores.map(ext => ext.id === newExtintorId ? { ...ext, status: 'INSTALADO' } : ext);
+                    }
+                    setExtintores(updatedExtintores);
+                    setVeiculos(prev => prev.map(v => v.id === veiculoId ? { ...v, extintorId: newExtintorId || null } : v));
+                    addLog(`Extintor trocado no veículo ID ${veiculoId}.`, 'OPERACAO');
+                    notify('Operação realizada com sucesso!');
+                    closeModal();
+                },
+                registrarVistoria: (veiculo, numExtintorInformado, numCilindro, validade, pressaoOk, fotoBase64 = null) => {
+                    if (veiculo.usaExtintor === false) {
+                        setInspecoes(prev => [{ id: 'insp_' + Date.now(), data: new Date().toISOString(), veiculoId: veiculo.id, prefixo: veiculo.prefixo, numExtintor: 'N/A', vencimentoExtintor: null, pressaoOk: true, foto: fotoBase64 }, ...prev]);
+                        addLog(`Vistoria: ${veiculo.prefixo} (Isento de Extintor).`, 'VISTORIA');
+                        notify('Vistoria registrada com sucesso!');
+                        return;
+                    }
+
+                    let extId = veiculo.extintorId;
+                    let extintorAtual = extId ? extintores.find(e => e.id === extId) : null;
+                    let novosExtintores = [...extintores];
+
+                    if (!extintorAtual || extintorAtual.numExtintor !== numExtintorInformado) {
+                        const existeEstoque = extintores.find(x => x.numExtintor === numExtintorInformado);
+                        if (existeEstoque) {
+                            extId = existeEstoque.id;
+                            novosExtintores = novosExtintores.map(x => x.id === extId ? { ...x, vencimento: validade, numCilindro: numCilindro || x.numCilindro, status: 'INSTALADO' } : x);
+                            if (extintorAtual) novosExtintores = novosExtintores.map(x => x.id === extintorAtual.id ? { ...x, status: 'MANUTENCAO' } : x);
+                        } else {
+                            extId = 'e_inspec_' + Date.now();
+                            novosExtintores.push({ id: extId, numExtintor: numExtintorInformado, numCilindro: numCilindro || '', tipo: 'ABC', peso: '4KG', vencimento: validade, status: 'INSTALADO', cr: veiculo.cr });
+                            if (extintorAtual) novosExtintores = novosExtintores.map(x => x.id === extintorAtual.id ? { ...x, status: 'MANUTENCAO' } : x);
+                        }
+                    } else {
+                        novosExtintores = novosExtintores.map(x => x.id === extId ? { ...x, vencimento: validade, numCilindro: numCilindro || x.numCilindro } : x);
+                    }
+
+                    setExtintores(novosExtintores);
+                    setVeiculos(prev => prev.map(x => x.id === veiculo.id ? { ...x, extintorId: extId } : x));
+                    setInspecoes(prev => [{ id: 'insp_' + Date.now(), data: new Date().toISOString(), veiculoId: veiculo.id, prefixo: veiculo.prefixo, numExtintor: numExtintorInformado, vencimentoExtintor: validade, pressaoOk, foto: fotoBase64 }, ...prev]);
+                    addLog(`Vistoria: ${veiculo.prefixo} | Pressão: ${pressaoOk ? 'OK' : 'FALHA'}.`, 'VISTORIA');
+                    notify('Vistoria registrada com sucesso!');
+                },
+                exportarVistoriasAutenticadas: (nomeAuditor) => {
+                    const chave = btoa(nomeAuditor + Date.now()).substring(0, 12).toUpperCase();
+                    const cabecalho = ['DATA/HORA', 'PREFIXO', 'PLACA', 'CR', 'EXTINTOR', 'VALIDADE EXTINTOR', 'PRESSÃO', 'FOTO COMPROBATÓRIA', 'AUTENTICADO POR', 'CHAVE DE AUDITORIA'];
+                    
+                    const linhas = inspecoes.map(i => {
+                        const dataFormatada = new Date(i.data).toLocaleString('pt-BR');
+                        const v = veiculos.find(ve => ve.id === i.veiculoId);
+                        const venc = i.vencimentoExtintor ? i.vencimentoExtintor.split('-').reverse().join('/') : '-';
+                        return [dataFormatada, i.prefixo, v?.placa || '-', v?.cr || '-', i.numExtintor, venc, i.pressaoOk ? 'OK' : 'FALHA', i.foto ? 'SIM' : 'NÃO', nomeAuditor.toUpperCase(), chave];
+                    });
+                    
+                    const ws = window.XLSX.utils.aoa_to_sheet([cabecalho, ...linhas]);
+                
+                    const rangeInfo = window.XLSX.utils.decode_range(ws['!ref']);
+                    for (let C = rangeInfo.s.c; C <= rangeInfo.e.c; ++C) {
+                        const cellAddress = window.XLSX.utils.encode_cell({ r: 0, c: C });
+                        if (!ws[cellAddress]) continue;
+                        
+                        ws[cellAddress].s = {
+                            fill: { fgColor: { rgb: "FF1E293B" } }, // Cinza Chumbo
+                            font: { name: 'Arial', sz: 11, color: { rgb: "FFFFFFFF" }, bold: true },
+                            alignment: { vertical: "center", horizontal: "center" }
+                        };
+                    }
+
+                    ws['!cols'] = [{wch: 18}, {wch: 10}, {wch: 12}, {wch: 18}, {wch: 16}, {wch: 20}, {wch: 12}, {wch: 22}, {wch: 25}, {wch: 20}];
+                    
+                    const wb = window.XLSX.utils.book_new();
+                    window.XLSX.utils.book_append_sheet(wb, ws, "Auditoria_Vistorias");
+                    window.XLSX.writeFile(wb, `Auditoria_ExtinControl_${new Date().toISOString().split('T')[0]}.xlsx`);
+                    addLog('Relatório de auditoria autenticado e exportado.', 'SISTEMA');
+                    closeModal();
+                },
+                excluirVeiculo: (id) => {
+                    setVeiculos(prev => prev.filter(v => v.id !== id));
+                    setInspecoes(prev => prev.filter(i => i.veiculoId !== id)); 
+                    addLog('Veículo e seu histórico foram removidos.', 'OPERACAO');
+                    notify('Veículo excluído com sucesso.');
+                    closeModal();
+                },
+                reativarVeiculo: (id) => {
+                    setVeiculos(prev => prev.map(v => v.id === id ? { ...v, status: 'OPERACIONAL' } : v));
+                    addLog(`Veículo ID ${id} foi reativado na frota.`, 'OPERACAO');
+                    notify('Veículo reativado.');
+                },
+                excluirInspecao: (id) => {
+                    setInspecoes(prev => prev.filter(i => i.id !== id));
+                    addLog(`Lançamento de inspeção removido.`, 'OPERACAO');
+                    notify('Lançamento apagado.');
+                    closeModal();
+                }
+            };
+
+            const store = {
+                veiculos, setVeiculos,
+                extintores, setExtintores,
+                inspecoes, setInspecoes,
+                logs, setLogs,
+                actions, openModal, closeModal, notify, addLog, modalState
+            };
+
+            return (
+                <AppContext.Provider value={store}>
+                    {children}
+                    {notification && (
+                        <div className={`fixed bottom-6 right-6 px-6 py-3 rounded-lg shadow-xl text-white font-medium flex items-center gap-3 z-50 animate-fadeIn ${notification.type === 'error' ? 'bg-red-600' : 'bg-emerald-600'}`}>
+                            <LucideIcon name={notification.type === 'error' ? 'alert-triangle' : 'check-circle'} className="w-5 h-5" />
+                            {notification.msg}
+                        </div>
+                    )}
+                </AppContext.Provider>
+            );
+        }
+
+        function Layout() {
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const fileInputRef = useRef(null);
+            const { extintores, setExtintores, veiculos, setVeiculos, addLog, notify, openModal } = useContext(AppContext);
+
+            const handleExportExcel = () => {
+                const cabecalho = ['PLACA', 'PREFIXO', 'CR', 'STATUS', 'EXTINTOR', 'VALIDADE', 'ALERTA'];
+                const linhas = veiculos.map(v => {
+                    const ext = v.extintorId ? extintores.find(e => e.id === v.extintorId) : null;
+                    let alerta = 'OK';
+                    if (!ext && v.usaExtintor !== false) alerta = 'SEM EXTINTOR';
+                    else if (ext && ext.vencimento) {
+                        const diff = Math.ceil((new Date(ext.vencimento) - new Date()) / (1000 * 60 * 60 * 24));
+                        if (diff < 0) alerta = 'VENCIDO';
+                        else if (diff <= 30) alerta = 'VENCE EM 30 DIAS';
+                    }
+                    return [
+                        v.placa, v.prefixo, v.cr, v.status,
+                        v.usaExtintor === false ? 'N/A' : (ext ? ext.numExtintor : 'PENDENTE'),
+                        ext ? (ext.vencimento ? ext.vencimento.split('-').reverse().join('/') : '-') : '-',
+                        alerta
+                    ];
+                });
+
+                const ws = window.XLSX.utils.aoa_to_sheet([cabecalho, ...linhas]);
+                
+                const rangeInfo = window.XLSX.utils.decode_range(ws['!ref']);
+                for (let C = rangeInfo.s.c; C <= rangeInfo.e.c; ++C) {
+                    const cellAddress = window.XLSX.utils.encode_cell({ r: 0, c: C });
+                    if (!ws[cellAddress]) continue;
+                    
+                    ws[cellAddress].s = {
+                        fill: { fgColor: { rgb: "FF1E293B" } }, // Cinza Chumbo
+                        font: { name: 'Arial', sz: 11, color: { rgb: "FFFFFFFF" }, bold: true },
+                        alignment: { vertical: "center", horizontal: "center" }
+                    };
+                }
+
+                ws['!cols'] = [{wch: 12}, {wch: 10}, {wch: 22}, {wch: 15}, {wch: 16}, {wch: 16}, {wch: 25}];
+
+                const wb = window.XLSX.utils.book_new();
+                window.XLSX.utils.book_append_sheet(wb, ws, "Frota_Ativa");
+                window.XLSX.writeFile(wb, `Frota_ExtinControl_${new Date().toISOString().split('T')[0]}.xlsx`);
+                addLog('Relatório geral de frota exportado.', 'SISTEMA');
+            };
+
+            const handleImportExcel = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const workbook = window.XLSX.read(evt.target.result, { type: 'binary', cellDates: true });
+                        let sheetName = workbook.SheetNames.includes('VEÍCULOS ATIVOS') ? 'VEÍCULOS ATIVOS' : workbook.SheetNames[0];
+                        const sheet = workbook.Sheets[sheetName];
+                        
+                        const rawData = window.XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                        let headerRowIndex = rawData.findIndex(row => row && (row.includes('PLACA') || row.includes('VEÍCULO')));
+                        if(headerRowIndex === -1) headerRowIndex = 0;
+
+                        const ativosRaw = window.XLSX.utils.sheet_to_json(sheet, { range: headerRowIndex, defval: null });
+                        
+                        let newExtintores = [], newVeiculos = [];
+                        
+                        ativosRaw.forEach((row, index) => {
+                            const placa = String(row['PLACA'] || '').trim().toUpperCase();
+                            const prefixo = String(row['VEÍCULO'] || '').trim();
+                            if((!placa || placa === 'NULL') && (!prefixo || prefixo === 'NULL')) return;
+
+                            const numExtintor = String(row['Nº EXTINTOR'] || '').trim();
+                            let extId = null;
+
+                            if(numExtintor && numExtintor !== 'null' && numExtintor !== 'undefined') {
+                                extId = `ext_imp_${Date.now()}_${index}`;
+                                let vencimento = '';
+                                if (row['VENCIMENTO']) {
+                                    try { vencimento = new Date(row['VENCIMENTO']).toISOString().split('T')[0]; } catch(e) {}
+                                }
+                                newExtintores.push({
+                                    id: extId, numExtintor, 
+                                    numCilindro: String(row['NÚMERO DO CILINDRO'] || row['CILINDRO'] || '').trim() || '',
+                                    tipo: String(row['TIPO'] || 'ABC').trim().toUpperCase(), 
+                                    peso: String(row['PESO'] || '4KG').trim().toUpperCase().replace(' KG', 'KG'), 
+                                    vencimento, status: 'INSTALADO', cr: 'CR 01 - SERRANA'
+                                });
+                            }
+
+                            newVeiculos.push({
+                                id: `v_imp_${Date.now()}_${index}`, 
+                                prefixo: prefixo !== 'null' ? prefixo : '',
+                                placa: placa !== 'null' ? placa : 'SEM PLACA', 
+                                tipoFrota: String(row['T. FROTA'] || 'CONVENCIONAL').trim().toUpperCase(),
+                                cr: 'CR 01 - SERRANA', status: 'OPERACIONAL', extintorId: extId
+                            });
+                        });
+
+                        setExtintores(prev => [...newExtintores, ...prev.filter(e => !newExtintores.find(n => n.numExtintor === e.numExtintor))]);
+                        setVeiculos(prev => [...newVeiculos, ...prev.filter(v => !newVeiculos.find(n => n.placa === v.placa))]);
+                        
+                        addLog(`Planilha Excel importada com sucesso.`, 'SISTEMA');
+                        notify('Dados mesclados com sucesso!');
+                    } catch (error) { 
+                        notify('Erro ao ler a planilha. Verifique o formato.', 'error'); 
+                    } finally {
+                        e.target.value = '';
+                    }
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            const pageTitles = {
+                dashboard: { title: 'Painel de Controle', icon: 'layout-dashboard' },
+                vistoria: { title: 'Registro de Vistorias', icon: 'clipboard-list' },
+                frota: { title: 'Gestão de Frota', icon: 'truck' },
+                estoque: { title: 'Estoque de Extintores', icon: 'fire-extinguisher' },
+                logs: { title: 'Trilha de Auditoria', icon: 'shield-check' }
+            };
+
+            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+            // Efeito para fechar o menu mobile automaticamente ao trocar de aba
+            useEffect(() => {
+                setIsMobileMenuOpen(false);
+            }, [activeTab]);
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-slate-50 relative">
+                    
+                    {/* Fundo escuro desfocado (Backdrop) que aparece no Mobile quando o menu está aberto */}
+                    {isMobileMenuOpen && (
+                        <div 
+                            className="fixed inset-0 bg-slate-900/50 z-40 md:hidden backdrop-blur-sm transition-opacity" 
+                            onClick={() => setIsMobileMenuOpen(false)}
+                        />
+                    )}
+
+                    <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isMobileMenuOpen={isMobileMenuOpen} setIsMobileMenuOpen={setIsMobileMenuOpen} />
+
+                    <main className="flex-1 flex flex-col relative h-full overflow-hidden min-w-0">
+                        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 shadow-sm z-10 shrink-0">
+                            
+                            <div className="flex items-center gap-2 sm:gap-3 overflow-hidden">
+                                {/* Botão Menu Mobile */}
+                                <button onClick={() => setIsMobileMenuOpen(true)} className="md:hidden p-1.5 -ml-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                                    <LucideIcon name="menu" className="w-6 h-6" />
+                                </button>
+                                
+                                <h1 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2 truncate">
+                                    <LucideIcon name={pageTitles[activeTab].icon} className="w-5 h-5 sm:w-6 sm:h-6 text-red-600 shrink-0 hidden min-[350px]:block" /> 
+                                    <span className="truncate">{pageTitles[activeTab].title}</span>
+                                </h1>
+                            </div>
+                            
+                            <div className="flex gap-2 shrink-0">
+                                <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx, .xls" onChange={handleImportExcel} />
+                                <button onClick={() => fileInputRef.current.click()} className="bg-slate-800 hover:bg-slate-900 text-white px-3 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition-colors shadow-md hidden sm:flex">
+                                    <LucideIcon name="upload" className="w-4 h-4" /> <span className="hidden sm:inline">Importar Base</span>
+                                </button>
+
+                                <button onClick={handleExportExcel} className="bg-red-600 hover:bg-red-700 text-white px-3 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition-colors shadow-md">
+                                    <LucideIcon name="download" className="w-4 h-4" /> <span className="hidden sm:inline">Exportar Frota</span>
+                                </button>
+                                {activeTab === 'frota' && (
+                                    <button onClick={() => openModal('VEICULO', null)} className="bg-slate-800 hover:bg-slate-900 text-white px-3 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition-colors shadow-md">
+                                        <LucideIcon name="plus" className="w-4 h-4" /> <span className="hidden lg:inline">Novo Veículo</span>
+                                    </button>
+                                )}
+                                {activeTab === 'estoque' && (
+                                    <button onClick={() => openModal('EXTINTOR', null)} className="bg-red-600 hover:bg-red-700 text-white px-3 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-2 text-sm transition-colors shadow-md">
+                                        <LucideIcon name="plus" className="w-4 h-4" /> <span className="hidden lg:inline">Novo Extintor</span>
+                                    </button>
+                                )}
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar relative">
+                            {activeTab === 'dashboard' && <DashboardView setActiveTab={setActiveTab} />}
+                            {activeTab === 'vistoria' && <VistoriaView />}
+                            {activeTab === 'frota' && <FrotaView />}
+                            {activeTab === 'estoque' && <EstoqueView />}
+                            {activeTab === 'logs' && <LogsView />}
+                        </div>
+                        
+                        {/* Assinatura de Desenvolvimento - Discreta e Elegante */}
+                        <footer className="py-2 text-center shrink-0 bg-transparent opacity-60 hover:opacity-100 transition-opacity">
+                            <p className="text-[9px] text-slate-400/70 font-light italic tracking-[0.2em]">
+                                estruturado e desenvolvido por <span className="text-red-400 font-normal">Rhayan Lucas</span>
+                            </p>
+                        </footer>
+                    </main>
+                    <ModalsManager />
+                </div>
+            );
+        }
+
+        function Sidebar({ activeTab, setActiveTab, isMobileMenuOpen, setIsMobileMenuOpen }) {
+            return (
+                <aside className={`
+                    fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-slate-300 flex flex-col shadow-2xl transition-transform duration-300 ease-in-out
+                    md:relative md:translate-x-0 shrink-0
+                    ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
+                `}>
+                    <div className="h-16 flex items-center justify-between px-6 bg-slate-950 border-b border-slate-800">
+                        <div className="flex items-center">
+                            <LucideIcon name="flame" className="text-red-500 w-7 h-7 mr-3" />
+                            <span className="text-white font-bold text-xl tracking-tight">Extin<span className="text-red-500">Control</span></span>
+                        </div>
+                        {/* Botão de Fechar o Menu no Mobile */}
+                        <button onClick={() => setIsMobileMenuOpen(false)} className="md:hidden text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800 transition-colors">
+                            <LucideIcon name="x" className="w-6 h-6" />
+                        </button>
+                    </div>
+                    
+                    <div className="p-4 flex-1 overflow-y-auto space-y-1 custom-scrollbar">
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 mt-2 px-2">Visão Geral</div>
+                        <NavBtn active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon="pie-chart">Painel de Controle</NavBtn>
+                        
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6 px-2">Operação de Pátio</div>
+                        <NavBtn active={activeTab === 'vistoria'} onClick={() => setActiveTab('vistoria')} icon="clipboard-list">Vistorias (Registro)</NavBtn>
+                        
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6 px-2">Logística & Ativos</div>
+                        <NavBtn active={activeTab === 'frota'} onClick={() => setActiveTab('frota')} icon="truck">Gestão de Frota</NavBtn>
+                        <NavBtn active={activeTab === 'estoque'} onClick={() => setActiveTab('estoque')} icon="fire-extinguisher">Estoque Extintores</NavBtn>
+                        
+                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6 px-2">Sistema</div>
+                        <NavBtn active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} icon="shield-check">Auditoria</NavBtn>
+                    </div>
+                </aside>
+            );
+        }
+
+        function NavBtn({ active, onClick, icon, children }) {
+            return (
+                <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-red-500/10 text-red-400 font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 font-medium'}`}>
+                    <LucideIcon name={icon} className="w-5 h-5" /> {children}
+                </button>
+            );
+        }
+
+        function DashboardView({ setActiveTab }) {
+            const { veiculos, extintores, inspecoes } = useContext(AppContext);
+            const [visaoGrafico, setVisaoGrafico] = useState('SEMANAL'); 
+            
+            const stats = useMemo(() => {
+                const frotaAtiva = veiculos.filter(v => v.status === 'OPERACIONAL');
+                const frotaObrigatoria = frotaAtiva.filter(v => v.usaExtintor !== false);
+                
+                const semExtintor = frotaObrigatoria.filter(v => !v.extintorId).length;
+                const hoje = new Date();
+                let veiculosComVencido = 0, vencem30 = 0;
+
+                frotaObrigatoria.forEach(v => {
+                    if(v.extintorId) {
+                        const ext = extintores.find(e => e.id === v.extintorId);
+                        if(ext && ext.vencimento) {
+                            const diffDays = Math.ceil((new Date(ext.vencimento) - hoje) / (1000 * 60 * 60 * 24));
+                            if (diffDays < 0) veiculosComVencido++;
+                            else if (diffDays <= 30) vencem30++;
+                        }
+                    }
+                });
+
+                const frotaIrregular = semExtintor + veiculosComVencido;
+                const frotaOK = frotaObrigatoria.length - frotaIrregular;
+                const taxaConformidade = frotaObrigatoria.length > 0 ? Math.round((frotaOK / frotaObrigatoria.length) * 100) : 100;
+
+                return { totalAtivos: frotaAtiva.length, frotaObrigatoria: frotaObrigatoria.length, frotaOK, semExtintor, vencem30, vencidos: veiculosComVencido, taxaConformidade };
+            }, [veiculos, extintores]);
+
+            const chartData = useMemo(() => {
+                if (visaoGrafico === 'SEMANAL') {
+                    const dias = [];
+                    for(let i = 6; i >= 0; i--) {
+                        const d = new Date();
+                        d.setDate(d.getDate() - i);
+                        const isoDate = d.toISOString().split('T')[0];
+                        dias.push({
+                            label: `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth()+1).toString().padStart(2, '0')}`,
+                            vistorias: inspecoes.filter(insp => insp.data.startsWith(isoDate)).length
+                        });
+                    }
+                    return dias;
+                } else {
+                    const meses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+                    const dadosAnuais = meses.map(m => ({ label: m, vistorias: 0 }));
+                    const anoAtual = new Date().getFullYear().toString();
+                    
+                    inspecoes.forEach(insp => {
+                        if(insp.data.startsWith(anoAtual)) {
+                            const mesIndex = parseInt(insp.data.split('-')[1], 10) - 1;
+                            if(mesIndex >= 0 && mesIndex <= 11) dadosAnuais[mesIndex].vistorias++;
+                        }
+                    });
+                    return dadosAnuais;
+                }
+            }, [inspecoes, visaoGrafico]);
+
+            const alertas = useMemo(() => {
+                const lista = [];
+                const hoje = new Date();
+                veiculos.filter(v => v.status === 'OPERACIONAL' && v.usaExtintor !== false).forEach(v => {
+                    if (!v.extintorId) {
+                        lista.push({ id: v.id, placa: v.placa, prefixo: v.prefixo, tipo: 'SEM_EXTINTOR', msg: 'Sem extintor vinculado' });
+                    } else {
+                        const ext = extintores.find(e => e.id === v.extintorId);
+                        if (ext && ext.vencimento) {
+                            const diff = Math.ceil((new Date(ext.vencimento) - hoje) / (1000 * 60 * 60 * 24));
+                            if (diff < 0) lista.push({ id: v.id, placa: v.placa, prefixo: v.prefixo, tipo: 'VENCIDO', msg: `Extintor vencido (${ext.vencimento.split('-').reverse().join('/')})` });
+                            else if (diff <= 30) lista.push({ id: v.id, placa: v.placa, prefixo: v.prefixo, tipo: 'ALERTA', msg: `Vence em ${diff} dias` });
+                        }
+                    }
+                });
+                return lista.sort((a, b) => a.tipo === 'VENCIDO' || a.tipo === 'SEM_EXTINTOR' ? -1 : 1).slice(0, 5);
+            }, [veiculos, extintores]);
+
+            return (
+                <div className="space-y-6 max-w-7xl mx-auto animate-fadeIn pb-10">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 sm:gap-6">
+                        <StatCard title="Conformidade Frota" value={`${stats.taxaConformidade}%`} subtitle={`${stats.frotaOK} de ${stats.frotaObrigatoria} OK`} color={stats.taxaConformidade > 90 ? "emerald" : stats.taxaConformidade > 75 ? "orange" : "redBrand"} isCritical={stats.taxaConformidade < 75} />
+                        <StatCard title="Frota Operacional" value={stats.totalAtivos} subtitle="Veículos ativos na base" color="redBrand" onClick={() => setActiveTab('frota')} />
+                        <StatCard title="Alerta: Sem Extintor" value={stats.semExtintor} subtitle="Clique p/ regularizar" color={stats.semExtintor > 0 ? "redBrand" : "emerald"} onClick={() => setActiveTab('frota')} />
+                        <StatCard title="Vencem 30 Dias" value={stats.vencem30} subtitle="Clique p/ visualizar" color={stats.vencem30 > 0 ? "orange" : "emerald"} onClick={() => setActiveTab('frota')} />
+                        <StatCard title="Veículos Vencidos" value={stats.vencidos} subtitle="Risco - Clique p/ resolver" color={stats.vencidos > 0 ? "redBrand" : "emerald"} isCritical={stats.vencidos > 0} onClick={() => setActiveTab('frota')} />
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="glass-card p-6 lg:col-span-2 flex flex-col">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="text-base font-bold text-slate-700 flex items-center gap-2"><LucideIcon name="bar-chart-2" className="w-5 h-5 text-red-500" /> Volume de Vistorias</h3>
+                                <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
+                                    <button onClick={() => setVisaoGrafico('SEMANAL')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${visaoGrafico === 'SEMANAL' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>7 Dias</button>
+                                    <button onClick={() => setVisaoGrafico('ANUAL')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${visaoGrafico === 'ANUAL' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Anual</button>
+                                </div>
+                            </div>
+                            <div className="flex-1 min-h-[250px]">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} dy={10} />
+                                        <YAxis axisLine={false} tickLine={false} tick={{fill: '#64748b', fontSize: 12}} allowDecimals={false} />
+                                        <RechartsTooltip cursor={{fill: '#f1f5f9'}} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                                        <Bar dataKey="vistorias" name="Vistorias" fill={visaoGrafico === 'ANUAL' ? '#10b981' : '#dc2626'} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        <div className="glass-card p-6 flex flex-col h-full max-h-[350px]">
+                            <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2 shrink-0"><LucideIcon name="alert-triangle" className="w-5 h-5 text-orange-500" /> Atenção Necessária</h3>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-3">
+                                {alertas.length === 0 ? (
+                                    <div className="h-full flex flex-col items-center justify-center text-emerald-500 text-center opacity-70">
+                                        <LucideIcon name="check-circle" className="w-10 h-10 mb-2" />
+                                        <p className="font-bold text-sm">Tudo OK na frota ativa!</p>
+                                    </div>
+                                ) : (
+                                    alertas.map((alerta, i) => (
+                                        <div key={i} onClick={() => setActiveTab('frota')} className="p-3 bg-slate-50 border border-slate-100 rounded-lg flex gap-3 items-start hover:bg-slate-100 transition-colors cursor-pointer hover:shadow-sm">
+                                            <LucideIcon name="alert-circle" className={`w-5 h-5 mt-0.5 shrink-0 ${alerta.tipo === 'ALERTA' ? 'text-orange-500' : 'text-red-500'}`} />
+                                            <div>
+                                                <p className="font-bold text-sm text-slate-800">{alerta.placa} <span className="text-xs text-slate-500 font-medium">({alerta.prefixo})</span></p>
+                                                <p className={`text-xs font-bold mt-1 ${alerta.tipo === 'ALERTA' ? 'text-orange-600' : 'text-red-600'}`}>{alerta.msg}</p>
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function StatCard({ title, value, subtitle, color, isCritical, onClick }) {
+            const colorClasses = {
+                redBrand: 'border-red-500 text-red-600',
+                emerald: 'border-emerald-500 text-emerald-600',
+                orange: 'border-orange-500 text-orange-600',
+                red: 'border-red-500 text-red-600'
+            };
+            const bgClass = isCritical ? 'bg-red-50' : 'bg-white';
+            const cursorClass = onClick ? 'cursor-pointer hover:shadow-lg transition-all transform hover:-translate-y-1' : '';
+            return (
+                <div onClick={onClick} className={`glass-card p-5 border-l-4 ${colorClasses[color].split(' ')[0]} ${bgClass} ${cursorClass}`}>
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{title}</p>
+                    <p className={`text-3xl font-black mt-1 ${isCritical ? 'text-red-600' : 'text-slate-800'}`}>{value}</p>
+                    {subtitle && <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wide">{subtitle}</p>}
+                </div>
+            );
+        }
+
+        function VistoriaView() {
+            const { veiculos, extintores, inspecoes, actions, notify, addLog, openModal } = useContext(AppContext);
+            const [aba, setAba] = useState('LANCAMENTO'); 
+            const [buscaBus, setBuscaBus] = useState('');
+            const [showSugestoes, setShowSugestoes] = useState(false);
+            const [form, setForm] = useState({ numExtintor: '', numCilindro: '', validade: '', pressaoOk: true });
+            const [foto, setFoto] = useState(null);
+
+            const sugestoes = useMemo(() => {
+                if (buscaBus.length < 1) return [];
+                return veiculos.filter(v => v.status === 'OPERACIONAL' && (v.prefixo.includes(buscaBus) || v.placa.includes(buscaBus.toUpperCase()))).slice(0, 5);
+            }, [buscaBus, veiculos]);
+
+            const veiculoEncontrado = useMemo(() => veiculos.find(v => v.prefixo === buscaBus), [veiculos, buscaBus]);
+            const extintorAtual = useMemo(() => veiculoEncontrado?.extintorId ? extintores.find(e => e.id === veiculoEncontrado.extintorId) : null, [veiculoEncontrado, extintores]);
+
+            useEffect(() => {
+                if (extintorAtual) setForm({ numExtintor: extintorAtual.numExtintor, numCilindro: extintorAtual.numCilindro || '', validade: extintorAtual.vencimento || '', pressaoOk: true });
+                else setForm({ numExtintor: '', numCilindro: '', validade: '', pressaoOk: true });
+            }, [extintorAtual]);
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (!veiculoEncontrado) return notify('Digite um Prefixo válido!', 'error');
+                if (veiculoEncontrado.usaExtintor !== false && !form.numExtintor) return notify('Informe o número do Extintor!', 'error');
+
+                actions.registrarVistoria(veiculoEncontrado, form.numExtintor.toUpperCase(), form.numCilindro.toUpperCase(), form.validade, form.pressaoOk, foto);
+                setBuscaBus(''); 
+                setFoto(null);
+            };
+
+            const handleCompressFoto = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = event => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX = 800; // Resolução otimizada para manter qualidade leve
+                        let w = img.width, h = img.height;
+                        if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } } 
+                        else { if (h > MAX) { w *= MAX / h; h = MAX; } }
+                        canvas.width = w; canvas.height = h;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, w, h);
+                        setFoto(canvas.toDataURL('image/jpeg', 0.6)); // Comprime para 60%
+                    };
+                };
+            };
+
+            const mesAtualStr = new Date().toISOString().slice(0, 7); 
+            const frotaOperacional = veiculos.filter(v => v.status === 'OPERACIONAL');
+            const idsVistoriados = [...new Set(inspecoes.filter(i => i.data.startsWith(mesAtualStr)).map(i => i.veiculoId))];
+            const pendentes = frotaOperacional.filter(v => !idsVistoriados.includes(v.id));
+            const pct = frotaOperacional.length === 0 ? 0 : Math.round((idsVistoriados.length / frotaOperacional.length) * 100);
+            const isIsento = veiculoEncontrado && veiculoEncontrado.usaExtintor === false;
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-6 pb-10">
+                    <div className="flex bg-slate-200 p-1 rounded-xl shadow-inner gap-1">
+                        <button onClick={() => setAba('LANCAMENTO')} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all flex justify-center items-center gap-2 ${aba === 'LANCAMENTO' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><LucideIcon name="plus-circle" className="w-4 h-4"/> Lançar Vistoria</button>
+                        <button onClick={() => setAba('HISTORICO')} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all flex justify-center items-center gap-2 ${aba === 'HISTORICO' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><LucideIcon name="history" className="w-4 h-4"/> Histórico de Lançamentos</button>
+                        <button onClick={() => setAba('PAINEL')} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all flex justify-center items-center gap-2 ${aba === 'PAINEL' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}><LucideIcon name="bar-chart-2" className="w-4 h-4"/> Painel Mensal ({pct}%)</button>
+                    </div>
+
+                    {aba === 'HISTORICO' && (
+                        <div className="glass-card overflow-hidden animate-fadeIn flex flex-col h-[500px]">
+                            <div className="bg-slate-50 border-b border-slate-200 p-4 flex justify-between items-center shrink-0">
+                                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><LucideIcon name="list-checks" className="w-5 h-5 text-red-600"/> Histórico de Vistorias</h2>
+                                <button onClick={() => openModal('AUTENTICAR_EXPORTACAO')} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 text-xs transition-colors shadow-sm">
+                                    <LucideIcon name="shield-check" className="w-4 h-4" /> Autenticar e Exportar
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
+                                <table className="w-full text-left border-collapse text-sm">
+                                    <thead className="bg-white sticky top-0 shadow-sm z-10">
+                                        <tr>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs">Data / Hora</th>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs">Prefixo</th>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs">Extintor Lançado</th>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs">Validade</th>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs text-center">Foto</th>
+                                            <th className="px-4 py-3 font-bold text-slate-500 uppercase text-xs text-right">Condição / Ações</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {inspecoes.map(insp => (
+                                            <tr key={insp.id} className="hover:bg-slate-50 transition-colors group">
+                                                <td className="px-4 py-3 text-slate-600 font-medium whitespace-nowrap">{new Date(insp.data).toLocaleString('pt-BR')}</td>
+                                                <td className="px-4 py-3 font-black text-slate-800">{insp.prefixo}</td>
+                                                <td className="px-4 py-3 text-slate-600 font-medium">{insp.numExtintor}</td>
+                                                <td className="px-4 py-3 text-slate-600 font-medium">{insp.vencimentoExtintor ? insp.vencimentoExtintor.split('-').reverse().join('/') : '-'}</td>
+                                                <td className="px-4 py-3 text-center">
+                                                    {insp.foto ? (
+                                                        <button onClick={() => openModal('VISUALIZAR_FOTO', insp.foto)} className="p-1.5 text-blue-600 bg-blue-50 border border-blue-100 hover:bg-blue-100 rounded transition-colors" title="Ver Foto">
+                                                            <LucideIcon name="camera" className="w-4 h-4"/>
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-slate-300">-</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <div className="flex items-center justify-end gap-3">
+                                                        {insp.pressaoOk ? 
+                                                            <span className="text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-1 rounded font-bold text-xs flex items-center gap-1"><LucideIcon name="check" className="w-3 h-3"/> OK</span> : 
+                                                            <span className="text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded font-bold text-xs flex items-center gap-1"><LucideIcon name="x" className="w-3 h-3"/> FALHA</span>
+                                                        }
+                                                        <button onClick={() => openModal('CONFIRMA_EXCLUSAO_INSPECAO', insp)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors opacity-0 sm:group-hover:opacity-100" title="Apagar Lançamento">
+                                                            <LucideIcon name="trash-2" className="w-5 h-5"/>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                {inspecoes.length === 0 && <div className="p-10 text-center text-slate-500 font-medium">Nenhum lançamento registrado no sistema.</div>}
+                            </div>
+                        </div>
+                    )}
+
+                    {aba === 'PAINEL' && (
+                        <PainelVistorias pendentes={pendentes} realizados={idsVistoriados.length} total={frotaOperacional.length} pct={pct} onVistoriar={(pfx) => { setBuscaBus(pfx); setAba('LANCAMENTO'); }} />
+                    )}
+
+                    {aba === 'LANCAMENTO' && (
+                        <div className="glass-card overflow-hidden animate-fadeIn">
+                            <div className="bg-slate-800 text-white p-5 border-b border-slate-700">
+                                <h2 className="text-lg font-bold flex items-center gap-2"><LucideIcon name="clipboard-check" className="w-5 h-5"/> Registro de Vistoria Física</h2>
+                            </div>
+                            <form onSubmit={handleSubmit} className="p-6 space-y-6 bg-white">
+                                <div>
+                                    <label className="text-sm font-bold text-slate-700 block mb-2">Prefixo do Veículo</label>
+                                    <div className="relative">
+                                        <LucideIcon name="search" className="w-5 h-5 absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                                        <input type="text" autoFocus required value={buscaBus} onChange={e => { setBuscaBus(e.target.value); setShowSugestoes(true); }} onBlur={() => setTimeout(() => setShowSugestoes(false), 200)} placeholder="Ex: 15129" className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-lg font-bold text-slate-800 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all" />
+                                        
+                                        {showSugestoes && sugestoes.length > 0 && (
+                                            <ul className="absolute z-10 w-full bg-white border border-slate-200 shadow-xl rounded-xl mt-2 overflow-hidden">
+                                                {sugestoes.map(s => (
+                                                    <li key={s.id} className="p-3 hover:bg-red-50 cursor-pointer border-b border-slate-100 last:border-0 flex justify-between items-center" onClick={() => { setBuscaBus(s.prefixo); setShowSugestoes(false); }}>
+                                                        <span className="font-bold text-slate-800 text-lg">{s.prefixo}</span>
+                                                        <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded">{s.placa} ({s.cr})</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                    {veiculoEncontrado ? (
+                                        <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg flex items-center justify-between">
+                                            <div className="flex items-center gap-2 text-red-800 font-bold"><LucideIcon name="truck" className="w-5 h-5"/> Placa: {veiculoEncontrado.placa}</div>
+                                            <span className="text-xs font-bold bg-red-200 text-red-800 px-2 py-1 rounded">{veiculoEncontrado.cr}</span>
+                                        </div>
+                                    ) : (buscaBus.length > 2 && <p className="text-sm text-red-500 font-medium mt-2 animate-fadeIn">Veículo não localizado na frota ativa.</p>)}
+                                </div>
+
+                                <div className={`space-y-4 transition-all duration-300 ${veiculoEncontrado ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                                    <hr className="border-slate-100 my-4" />
+                                    {isIsento ? (
+                                        <div className="bg-slate-50 border border-slate-200 p-6 rounded-xl text-center">
+                                            <LucideIcon name="check-circle" className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                                            <h3 className="font-bold text-slate-700 text-lg">Veículo Isento de Extintor</h3>
+                                            <p className="text-sm text-slate-500">Este veículo está marcado como "Não se Aplica". A vistoria salvará apenas a inspeção geral.</p>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-bold text-slate-700 block mb-2">Nº Casco Extintor</label>
+                                                    <input type="text" required value={form.numExtintor} onChange={e => setForm({...form, numExtintor: e.target.value.toUpperCase()})} className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-lg font-bold text-slate-800 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all" />
+                                                </div>
+                                                <div>
+                                                    <label className="text-sm font-bold text-slate-700 block mb-2">Nº Cilindro (Opcional)</label>
+                                                    <input type="text" value={form.numCilindro} onChange={e => setForm({...form, numCilindro: e.target.value.toUpperCase()})} placeholder="Ex: 012345" className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-lg font-bold text-slate-800 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all" />
+                                                </div>
+                                                <div className="sm:col-span-2">
+                                                    <label className="text-sm font-bold text-slate-700 flex items-center justify-between mb-2">Validade no Selo <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-normal">Digite ou clique no ícone</span></label>
+                                                    <input type="date" required value={form.validade} onChange={e => setForm({...form, validade: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-300 rounded-xl text-lg text-slate-800 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all" />
+                                                </div>
+                                            </div>
+                                            <div className="pt-2">
+                                                <label className="text-sm font-bold text-slate-700 block mb-3">Condição do Equipamento</label>
+                                                <div className="flex flex-col sm:flex-row gap-3">
+                                                    <button type="button" onClick={() => setForm({...form, pressaoOk: true})} className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 border-2 transition-all ${form.pressaoOk ? 'bg-emerald-50 border-emerald-500 text-emerald-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="check-circle" className="w-6 h-6"/> Pressão OK</button>
+                                                    <button type="button" onClick={() => setForm({...form, pressaoOk: false})} className={`flex-1 py-3 rounded-xl font-bold flex items-center justify-center gap-2 border-2 transition-all ${!form.pressaoOk ? 'bg-red-50 border-red-500 text-red-700' : 'bg-white border-slate-200 text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="alert-triangle" className="w-6 h-6"/> Despressurizado / Falha</button>
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+                                    
+                                    <div className="pt-4 border-t border-slate-100 mt-4">
+                                        <label className="text-sm font-bold text-slate-700 block mb-3">Evidência Fotográfica (Opcional)</label>
+                                        {!foto ? (
+                                            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-slate-300 border-dashed rounded-xl cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors">
+                                                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                                                    <LucideIcon name="camera" className="w-8 h-8 text-slate-400 mb-2" />
+                                                    <p className="text-sm text-slate-500 font-bold">Tirar Foto do Equipamento</p>
+                                                </div>
+                                                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleCompressFoto} />
+                                            </label>
+                                        ) : (
+                                            <div className="relative w-full h-48 bg-slate-900 rounded-xl overflow-hidden shadow-sm flex items-center justify-center border border-slate-200">
+                                                <img src={foto} alt="Evidência" className="max-h-full max-w-full object-contain" />
+                                                <button type="button" onClick={() => setFoto(null)} className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-lg shadow-md hover:bg-red-700 transition-colors">
+                                                    <LucideIcon name="trash-2" className="w-5 h-5" />
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <button type="submit" disabled={!veiculoEncontrado} className="w-full py-4 bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white font-black text-lg rounded-xl shadow-md transition-all flex justify-center items-center gap-2 mt-4">
+                                    <LucideIcon name="save" className="w-5 h-5"/> Gravar Vistoria
+                                </button>
+                            </form>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function PainelVistorias({ pendentes, realizados, total, pct, onVistoriar }) {
+            return (
+                <div className="space-y-4 animate-fadeIn">
+                    <div className="glass-card p-6">
+                        <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2">Progresso do Mês Atual</h3>
+                        <div className="flex justify-between items-end mb-3">
+                            <div><p className="text-3xl font-black text-slate-800">{realizados} <span className="text-lg text-slate-400 font-medium">/ {total}</span></p><p className="text-xs font-bold text-slate-500 uppercase tracking-wide mt-1">Concluídos</p></div>
+                            <div className="text-right"><p className="text-2xl font-black text-red-500">{pendentes.length}</p><p className="text-xs font-bold text-red-400 uppercase tracking-wide">Faltam</p></div>
+                        </div>
+                        <div className="w-full bg-slate-100 rounded-full h-3 mt-2 overflow-hidden">
+                            <div className={`h-full rounded-full transition-all duration-1000 ${pct === 100 ? 'bg-emerald-500' : 'bg-red-500'}`} style={{ width: `${pct}%` }}></div>
+                        </div>
+                    </div>
+                    <div className="glass-card overflow-hidden">
+                        <div className="bg-slate-50 border-b border-slate-200 p-4"><h4 className="font-bold text-slate-700">Falta Vistoriar ({pendentes.length})</h4></div>
+                        <div className="max-h-96 overflow-y-auto custom-scrollbar p-2">
+                            {pendentes.length === 0 ? (
+                                <div className="p-8 text-center text-emerald-600 font-bold flex flex-col items-center"><LucideIcon name="award" className="w-12 h-12 mb-2 text-emerald-400"/> Frota 100% vistoriada!</div>
+                            ) : (
+                                pendentes.map(v => (
+                                    <div key={v.id} className="flex justify-between items-center p-3 hover:bg-slate-50 rounded-lg border-b border-slate-100 last:border-0">
+                                        <div><p className="font-bold text-slate-800">{v.placa}</p><p className="text-xs text-slate-500">PFX: {v.prefixo} | {v.cr}</p></div>
+                                        <button onClick={() => onVistoriar(v.prefixo)} className="px-3 py-1.5 bg-red-50 text-red-700 font-bold text-xs rounded-md border border-red-100 hover:bg-red-100 transition-colors">Vistoriar</button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function FrotaView() {
+            const { veiculos, extintores, openModal, actions } = useContext(AppContext);
+            const [busca, setBusca] = useState('');
+            const [filtroStatus, setFiltroStatus] = useState('OPERACIONAL');
+            
+            const filtrados = useMemo(() => 
+                veiculos.filter(v => 
+                    (filtroStatus === 'ALL' || v.status === filtroStatus) &&
+                    (v.placa.toLowerCase().includes(busca.toLowerCase()) || v.prefixo.includes(busca))
+                ),
+            [veiculos, busca, filtroStatus]);
+
+            return (
+                <div className="glass-card flex flex-col h-full absolute inset-4 sm:inset-6 animate-fadeIn">
+                    <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-t-xl shrink-0">
+                        <div className="flex bg-white rounded-lg p-1 border border-slate-200 shadow-sm w-full sm:w-auto">
+                            <button onClick={() => setFiltroStatus('OPERACIONAL')} className={`flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filtroStatus === 'OPERACIONAL' ? 'bg-red-50 text-red-700' : 'text-slate-500 hover:text-slate-700'}`}>Operacionais</button>
+                            <button onClick={() => setFiltroStatus('DESATIVADO')} className={`flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filtroStatus === 'DESATIVADO' ? 'bg-slate-200 text-slate-700' : 'text-slate-500 hover:text-slate-700'}`}>Desativados</button>
+                            <button onClick={() => setFiltroStatus('ALL')} className={`flex-1 sm:flex-none px-4 py-1.5 text-xs font-bold rounded-md transition-all ${filtroStatus === 'ALL' ? 'bg-red-50 text-red-700' : 'text-slate-500 hover:text-slate-700'}`}>Todos</button>
+                        </div>
+
+                        <div className="relative w-full max-w-md">
+                            <LucideIcon name="search" className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                            <input type="text" placeholder="Buscar placa ou prefixo..." value={busca} onChange={e => setBusca(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none shadow-sm" />
+                        </div>
+                    </div>
+                    
+                    <div className="flex-1 overflow-auto custom-scrollbar bg-white rounded-b-xl">
+                        <table className="w-full text-left border-collapse min-w-[700px]">
+                            <thead className="bg-slate-50 sticky top-0 shadow-sm z-10">
+                                <tr>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Veículo</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Base / Status</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Extintor Vinculado</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filtrados.map(v => {
+                                    const ext = v.extintorId ? extintores.find(e => e.id === v.extintorId) : null;
+                                    return (
+                                        <tr key={v.id} className={`transition-colors group ${v.status === 'DESATIVADO' ? 'bg-slate-50/40 hover:bg-slate-100/60 opacity-80' : 'hover:bg-slate-50'}`}>
+                                            <td className="px-4 py-3">
+                                                <div className="font-bold text-slate-800">{v.placa}</div>
+                                                <div className="text-xs text-slate-500 font-medium">PFX: {v.prefixo} • {v.tipoFrota}</div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="text-sm text-slate-700 font-medium mb-1">{v.cr}</div>
+                                                <StatusBadge status={v.status} type="veiculo" />
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                {v.usaExtintor === false ? (
+                                                    <span className="text-slate-500 font-bold text-xs flex items-center gap-1 bg-slate-100 border border-slate-200 w-fit px-2 py-1 rounded">NÃO SE APLICA</span>
+                                                ) : ext ? (
+                                                    <div>
+                                                        <div className="text-sm font-bold text-slate-700">Nº {ext.numExtintor} <span className="text-[10px] bg-slate-200 px-1 py-0.5 rounded text-slate-600 ml-1">{ext.tipo}</span></div>
+                                                        <div className="text-xs mt-1"><ValidadeBadge data={ext.vencimento} /></div>
+                                                    </div>
+                                                ) : (<span className="text-red-500 font-bold text-xs flex items-center gap-1 bg-red-50 w-fit px-2 py-1 rounded"><LucideIcon name="alert-circle" className="w-3 h-3" /> PENDENTE</span>)}
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <div className="flex gap-2 justify-end opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    {v.status === 'DESATIVADO' ? (
+                                                        <button onClick={() => actions.reativarVeiculo(v.id)} className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 rounded-md text-xs font-bold shadow-sm transition-all flex items-center gap-1"><LucideIcon name="power" className="w-3 h-3" /> Reativar</button>
+                                                    ) : v.usaExtintor !== false ? (
+                                                        <button onClick={() => openModal('TROCA_EXTINTOR', { veiculo: v, currExt: ext })} className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-red-600 rounded-md text-xs font-bold shadow-sm transition-all">{ext ? 'Trocar' : 'Instalar'}</button>
+                                                    ) : null}
+                                                    <button onClick={() => openModal('VEICULO', v)} className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-md text-xs font-bold shadow-sm transition-all">Editar</button>
+                                                    <button onClick={() => openModal('CONFIRMA_EXCLUSAO', v)} className="px-2 py-1.5 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-md shadow-sm transition-all flex items-center justify-center"><LucideIcon name="trash-2" className="w-4 h-4" /></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                {filtrados.length === 0 && (
+                                    <tr><td colSpan="4" className="text-center py-10 text-slate-500 font-medium">Nenhum veículo encontrado para este filtro.</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        function EstoqueView() {
+            const { extintores, veiculos, openModal } = useContext(AppContext);
+            const [filtro, setFiltro] = useState('ALL');
+            
+            const filtrados = useMemo(() => 
+                extintores.filter(e => filtro === 'ALL' || e.status === filtro),
+            [extintores, filtro]);
+
+            return (
+                <div className="glass-card flex flex-col h-full absolute inset-4 sm:inset-6 animate-fadeIn">
+                    <div className="p-3 border-b border-slate-200 bg-slate-50 flex overflow-x-auto custom-scrollbar gap-2 rounded-t-xl shrink-0">
+                        {['ALL', 'DISPONIVEL', 'INSTALADO', 'MANUTENCAO', 'INUTILIZADO'].map(st => (
+                            <button key={st} onClick={() => setFiltro(st)} className={`px-4 py-1.5 text-xs font-bold rounded-full transition-colors border whitespace-nowrap ${filtro === st ? 'bg-red-600 text-white border-red-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
+                                {st === 'ALL' ? 'Visão Geral' : st.replace('_', ' ')}
+                            </button>
+                        ))}
+                    </div>
+                    
+                    <div className="flex-1 overflow-auto custom-scrollbar bg-white rounded-b-xl">
+                        <table className="w-full text-left border-collapse min-w-[700px]">
+                            <thead className="bg-slate-50 sticky top-0 shadow-sm z-10">
+                                <tr>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Equipamento</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Status & Local</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Validade</th>
+                                    <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {filtrados.map(e => {
+                                    const veiculoVinculado = veiculos.find(v => v.extintorId === e.id);
+                                    return (
+                                        <tr key={e.id} className="hover:bg-slate-50 transition-colors group">
+                                            <td className="px-4 py-3">
+                                                <div className="font-bold text-slate-800">Nº {e.numExtintor}</div>
+                                                <div className="text-xs text-slate-500 font-medium">CIL: {e.numCilindro || '-'} • {e.tipo} {e.peso}</div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="mb-1"><StatusBadge status={e.status} type="extintor" /></div>
+                                                <div className="text-xs font-medium text-slate-500">{e.status === 'INSTALADO' && veiculoVinculado ? `Placa: ${veiculoVinculado.placa}` : e.cr}</div>
+                                            </td>
+                                            <td className="px-4 py-3"><ValidadeBadge data={e.vencimento} /></td>
+                                            <td className="px-4 py-3 text-right">
+                                                <div className="flex gap-2 justify-end opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    {e.status === 'MANUTENCAO' && (<button onClick={() => openModal('RECARGA', e)} className="px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-md text-xs font-bold transition-colors shadow-sm">Recarga</button>)}
+                                                    <button onClick={() => openModal('EXTINTOR', e)} className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-md text-xs font-bold shadow-sm transition-all">Editar</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        function LogsView() {
+            const { logs } = useContext(AppContext);
+            return (
+                <div className="glass-card max-w-4xl mx-auto flex flex-col h-full absolute inset-4 sm:inset-6 animate-fadeIn">
+                    <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl shrink-0">
+                        <h2 className="text-base font-bold text-slate-800 flex items-center gap-2"><LucideIcon name="activity" className="w-5 h-5 text-red-500"/> Registro de Atividades</h2>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 bg-white rounded-b-xl">
+                        {logs.map(log => (
+                            <div key={log.id} className="flex gap-4 p-3 bg-slate-50 rounded-lg border border-slate-100 hover:border-slate-200 transition-colors">
+                                <div className="mt-0.5"><LucideIcon name={log.tipo === 'VISTORIA' ? 'check-square' : log.tipo === 'OPERACAO' ? 'tool' : 'info'} className="w-4 h-4 text-slate-400" /></div>
+                                <div><p className="text-sm font-medium text-slate-700">{log.descricao}</p><p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{new Date(log.data).toLocaleString('pt-BR')}</p></div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function ValidadeBadge({ data }) {
+            if(!data) return <span className="text-red-500 font-bold text-xs bg-red-50 px-2 py-1 rounded">INVÁLIDO</span>;
+            const hoje = new Date(), venc = new Date(data);
+            const diff = Math.ceil((venc - hoje) / (1000 * 60 * 60 * 24));
+            const formatada = `${data.split('-')[2]}/${data.split('-')[1]}/${data.split('-')[0]}`;
+            
+            if(diff < 0) return <span className="inline-block bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold border border-red-200">{formatada} (VENCIDO)</span>;
+            if(diff <= 30) return <span className="inline-block bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold border border-orange-200">{formatada} (ALERTA)</span>;
+            return <span className="inline-block bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-xs font-medium border border-slate-200">{formatada}</span>;
+        }
+
+        function StatusBadge({ status, type }) {
+            const styles = {
+                OPERACIONAL: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                DISPONIVEL: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                INSTALADO: 'bg-red-100 text-red-700 border-red-200',
+                MANUTENCAO: 'bg-orange-100 text-orange-700 border-orange-200',
+                default: 'bg-slate-100 text-slate-600 border-slate-200'
+            };
+            const css = styles[status] || styles.default;
+            return <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${css}`}>{status}</span>;
+        }
+
+        function ModalsManager() {
+            const { modalState, closeModal, veiculos, setVeiculos, extintores, setExtintores, actions, notify, addLog } = useContext(AppContext);
+            if (!modalState.type) return null;
+
+            const Overlay = ({ children }) => (
+                <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4 modal-overlay" onClick={(e) => e.target === e.currentTarget && closeModal()}>
+                    {children}
+                </div>
+            );
+
+            // Modal Troca
+            if (modalState.type === 'TROCA_EXTINTOR') {
+                const { veiculo, currExt } = modalState.data;
+                return (
+                    <Overlay>
+                        <ModalTroca veiculo={veiculo} currExt={currExt} extintores={extintores} onClose={closeModal} onSave={actions.trocarExtintor} />
+                    </Overlay>
+                );
+            }
+
+            // Modal Veiculo
+            if (modalState.type === 'VEICULO') {
+                return (
+                    <Overlay>
+                        <FormVeiculo data={modalState.data} onClose={closeModal} onSave={(v) => {
+                            if(modalState.data) { setVeiculos(veiculos.map(x => x.id === v.id ? v : x)); addLog(`Veículo ${v.placa} atualizado.`); }
+                            else { setVeiculos([{...v, id: 'v'+Date.now()}, ...veiculos]); addLog(`Veículo ${v.placa} criado.`); }
+                            notify('Veículo salvo!'); closeModal();
+                        }} />
+                    </Overlay>
+                );
+            }
+
+            // Modal Extintor
+            if (modalState.type === 'EXTINTOR') {
+                return (
+                    <Overlay>
+                        <FormExtintor data={modalState.data} onClose={closeModal} onSave={(e) => {
+                            if(modalState.data) { setExtintores(extintores.map(x => x.id === e.id ? e : x)); addLog(`Extintor ${e.numExtintor} atualizado.`); }
+                            else { setExtintores([{...e, id: 'e'+Date.now()}, ...extintores]); addLog(`Extintor ${e.numExtintor} criado.`); }
+                            notify('Extintor salvo!'); closeModal();
+                        }} />
+                    </Overlay>
+                );
+            }
+
+            // Modal Recarga
+            if (modalState.type === 'RECARGA') {
+                return (
+                    <Overlay>
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm modal-content overflow-hidden">
+                            <div className="p-5 border-b border-slate-100 bg-slate-50"><h2 className="text-lg font-bold">Retorno de Recarga</h2></div>
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                const novaData = e.target.data.value;
+                                setExtintores(extintores.map(x => x.id === modalState.data.id ? {...x, vencimento: novaData, status: 'DISPONIVEL'} : x));
+                                addLog(`Extintor ${modalState.data.numExtintor} recarregado.`); notify('Recarga concluída!'); closeModal();
+                            }}>
+                                <div className="p-5">
+                                    <label className="text-sm font-bold text-slate-700 block mb-2">Nova Data de Validade</label>
+                                    <input type="date" required name="data" className="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:border-red-500" />
+                                </div>
+                                <div className="p-4 border-t bg-slate-50 flex justify-end gap-2">
+                                    <button type="button" onClick={closeModal} className="px-4 py-2 text-slate-600 font-medium">Cancelar</button>
+                                    <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold">Concluir</button>
+                                </div>
+                            </form>
+                        </div>
+                    </Overlay>
+                );
+            }
+
+            // Modal Confirma Exclusão
+            if (modalState.type === 'CONFIRMA_EXCLUSAO') {
+                const veiculo = modalState.data;
+                return (
+                    <Overlay>
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm modal-content overflow-hidden text-center p-6">
+                            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><LucideIcon name="alert-triangle" className="w-8 h-8" /></div>
+                            <h2 className="text-xl font-black text-slate-800 mb-2">Excluir Veículo?</h2>
+                            <p className="text-sm text-slate-500 mb-6">Tem certeza que deseja excluir permanentemente o veículo <br/><b className="text-slate-800">{veiculo.placa} (PFX: {veiculo.prefixo})</b>?<br/><br/>O histórico de vistorias associado a ele também será apagado. Esta ação <b>não pode ser desfeita</b>.</p>
+                            <div className="flex gap-3">
+                                <button onClick={closeModal} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">Cancelar</button>
+                                <button onClick={() => actions.excluirVeiculo(veiculo.id)} className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-colors">Sim, Excluir</button>
+                            </div>
+                        </div>
+                    </Overlay>
+                );
+            }
+
+            // Modal Confirma Exclusão de Inspeção
+            if (modalState.type === 'CONFIRMA_EXCLUSAO_INSPECAO') {
+                const insp = modalState.data;
+                return (
+                    <Overlay>
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm modal-content overflow-hidden text-center p-6">
+                            <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4"><LucideIcon name="trash-2" className="w-8 h-8" /></div>
+                            <h2 className="text-xl font-black text-slate-800 mb-2">Apagar Lançamento?</h2>
+                            <p className="text-sm text-slate-500 mb-6">Tem certeza que deseja apagar o registro do veículo <b className="text-slate-800">{insp.prefixo}</b> realizado em {new Date(insp.data).toLocaleString('pt-BR')}?<br/><br/>Esta ação é definitiva.</p>
+                            <div className="flex gap-3">
+                                <button onClick={closeModal} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition-colors">Cancelar</button>
+                                <button onClick={() => actions.excluirInspecao(insp.id)} className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-colors">Sim, Apagar</button>
+                            </div>
+                        </div>
+                    </Overlay>
+                );
+            }
+
+            // Modal Autenticar Exportação
+            if (modalState.type === 'AUTENTICAR_EXPORTACAO') {
+                return (
+                    <Overlay>
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md modal-content overflow-hidden">
+                            <div className="p-5 border-b border-slate-100 bg-slate-900 text-white flex items-center gap-2"><LucideIcon name="shield-check" className="w-5 h-5 text-red-400" /><h2 className="text-lg font-bold">Autenticação de Relatório</h2></div>
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                actions.exportarVistoriasAutenticadas(e.target.auditor.value);
+                            }}>
+                                <div className="p-6 space-y-4">
+                                    <p className="text-sm text-slate-600">Para garantir a validade jurídica/operacional na auditoria, insira seu nome e matrícula. O arquivo gerado conterá uma chave de autenticação (Hash) irrevogável.</p>
+                                    <div>
+                                        <label className="text-sm font-bold text-slate-700 block mb-2">Nome e Matrícula do Auditor</label>
+                                        <input type="text" required name="auditor" autoFocus placeholder="Ex: João Silva - Mat: 12345" className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 focus:border-red-500 focus:ring-2 focus:ring-red-200 outline-none transition-all" />
+                                    </div>
+                                </div>
+                                <div className="p-4 border-t bg-slate-50 flex justify-end gap-3">
+                                    <button type="button" onClick={closeModal} className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-200 rounded-lg transition-colors">Cancelar</button>
+                                    <button type="submit" className="px-6 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold shadow-md transition-all flex items-center gap-2"><LucideIcon name="download" className="w-4 h-4" /> Assinar e Exportar</button>
+                                </div>
+                            </form>
+                        </div>
+                    </Overlay>
+                );
+            }
+
+            // Modal Visualizar Foto
+            if (modalState.type === 'VISUALIZAR_FOTO') {
+                return (
+                    <Overlay>
+                        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg modal-content overflow-hidden flex flex-col">
+                            <div className="p-4 border-b border-slate-100 bg-slate-900 flex justify-between items-center text-white">
+                                <h2 className="text-lg font-bold flex items-center gap-2"><LucideIcon name="image" className="w-5 h-5" /> Evidência Fotográfica</h2>
+                                <button onClick={closeModal} className="text-slate-400 hover:text-white transition-colors"><LucideIcon name="x" className="w-6 h-6" /></button>
+                            </div>
+                            <div className="bg-slate-100 p-2 flex justify-center items-center">
+                                <img src={modalState.data} alt="Evidência" className="max-h-[60vh] object-contain rounded-lg shadow-sm" />
+                            </div>
+                            <div className="p-4 bg-white flex justify-end">
+                                <button onClick={closeModal} className="px-6 py-2 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition-colors">Fechar</button>
+                            </div>
+                        </div>
+                    </Overlay>
+                );
+            }
+
+            return null;
+        }
+
+        // Formulários extraídos para organizar o ModalsManager
+        function ModalTroca({ veiculo, currExt, extintores, onClose, onSave }) {
+            const [acaoAntigo, setAcaoAntigo] = useState('MANUTENCAO');
+            const [novoExtId, setNovoExtId] = useState('');
+            const disponiveis = extintores.filter(e => e.status === 'DISPONIVEL' && e.cr === veiculo.cr && e.vencimento && new Date(e.vencimento) >= new Date());
+
+            return (
+                <form onSubmit={e => { e.preventDefault(); onSave(veiculo.id, currExt?.id, acaoAntigo, novoExtId); }} className="bg-white rounded-2xl shadow-2xl w-full max-w-lg modal-content overflow-hidden">
+                    <div className="p-5 border-b border-slate-100 bg-slate-50"><h2 className="text-lg font-bold text-slate-800">Troca de Equipamento</h2></div>
+                    <div className="p-5 space-y-5">
+                        <div className="p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-800 font-bold flex items-center gap-2"><LucideIcon name="truck" className="w-5 h-5" /> {veiculo.placa} ({veiculo.cr})</div>
+                        {currExt && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-bold text-slate-700">Ação para o atual (Nº {currExt.numExtintor})</label>
+                                <select value={acaoAntigo} onChange={e => setAcaoAntigo(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-red-500">
+                                    <option value="MANUTENCAO">Enviar para Manutenção/Recarga</option><option value="DISPONIVEL">Retornar ao Estoque</option><option value="INUTILIZADO">Descartar (Sucata)</option>
+                                </select>
+                            </div>
+                        )}
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-slate-700">Novo Extintor a Instalar</label>
+                            {disponiveis.length === 0 ? (<div className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 font-medium">Nenhum extintor válido no estoque deste CR.</div>) : (
+                                <select required value={novoExtId} onChange={e => setNovoExtId(e.target.value)} className="w-full px-3 py-2.5 border border-slate-300 rounded-lg outline-none focus:border-red-500">
+                                    <option value="" disabled>Selecione no estoque...</option>
+                                    {disponiveis.map(e => (<option key={e.id} value={e.id}>Nº {e.numExtintor} - Val: {e.vencimento.split('-').reverse().join('/')}</option>))}
+                                </select>
+                            )}
+                        </div>
+                    </div>
+                    <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3"><button type="button" onClick={onClose} className="px-4 py-2 text-slate-600 font-medium">Cancelar</button><button type="submit" disabled={!novoExtId && disponiveis.length > 0} className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg disabled:opacity-50">Confirmar</button></div>
+                </form>
+            );
+        }
+
+        function FormVeiculo({ data, onClose, onSave }) {
+            const [form, setForm] = useState(data || { prefixo: '', placa: '', tipoFrota: 'CONVENCIONAL', cr: CRS[0], status: 'OPERACIONAL', extintorId: null, usaExtintor: true });
+            const handleChange = e => setForm({...form, [e.target.name]: e.target.name === 'usaExtintor' ? e.target.value === 'true' : e.target.value.toUpperCase()});
+            return (
+                <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="bg-white rounded-2xl shadow-2xl w-full max-w-md modal-content overflow-hidden">
+                    <div className="p-5 border-b font-bold text-lg bg-slate-50">{data ? 'Editar Veículo' : 'Novo Veículo'}</div>
+                    <div className="p-5 space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-sm font-bold text-slate-700 mb-1 block">Placa</label><input required name="placa" value={form.placa} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                            <div><label className="text-sm font-bold text-slate-700 mb-1 block">Prefixo</label><input required name="prefixo" value={form.prefixo} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-sm font-bold text-slate-700 mb-1 block">Tipo de Frota</label><input required name="tipoFrota" value={form.tipoFrota} onChange={handleChange} placeholder="Ex: ONIBUS, VAN" className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                            <div><label className="text-sm font-bold text-slate-700 mb-1 block">Exige Extintor?</label><select name="usaExtintor" value={form.usaExtintor !== false ? 'true' : 'false'} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none"><option value="true">SIM</option><option value="false">NÃO (N/A)</option></select></div>
+                        </div>
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Status</label><select name="status" value={form.status} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none"><option value="OPERACIONAL">OPERACIONAL</option><option value="DESATIVADO">DESATIVADO</option></select></div>
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Base (CR)</label><select name="cr" value={form.cr} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" disabled={!!data}>{CRS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                    </div>
+                    <div className="p-4 border-t flex justify-end gap-2 bg-slate-50"><button type="button" onClick={onClose} className="px-4 py-2 font-medium text-slate-600">Cancelar</button><button type="submit" className="px-5 py-2 bg-red-600 text-white font-bold rounded-lg">Salvar</button></div>
+                </form>
+            );
+        }
+
+        function FormExtintor({ data, onClose, onSave }) {
+            const [form, setForm] = useState(data || { numExtintor: '', numCilindro: '', tipo: 'ABC', peso: '4KG', vencimento: '', status: 'DISPONIVEL', cr: CRS[0] });
+            const handleChange = e => setForm({...form, [e.target.name]: e.target.value.toUpperCase()});
+            return (
+                <form onSubmit={e => { e.preventDefault(); onSave(form); }} className="bg-white rounded-2xl shadow-2xl w-full max-w-lg modal-content overflow-hidden">
+                    <div className="p-5 border-b font-bold text-lg bg-slate-50">{data ? 'Editar Extintor' : 'Novo Extintor'}</div>
+                    <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Nº Patrimônio</label><input required name="numExtintor" value={form.numExtintor} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Nº Cilindro (Opcional)</label><input name="numCilindro" value={form.numCilindro} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Tipo</label><select name="tipo" value={form.tipo} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none"><option>ABC</option><option>BC</option><option>CO2</option><option>AGUA</option></select></div>
+                        <div><label className="text-sm font-bold text-slate-700 mb-1 block">Peso</label><select name="peso" value={form.peso} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none"><option>4KG</option><option>6KG</option><option>8KG</option><option>12KG</option></select></div>
+                        <div className="sm:col-span-2"><label className="text-sm font-bold text-slate-700 mb-1 block">Validade</label><input type="date" required name="vencimento" value={form.vencimento} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" /></div>
+                        
+                        <div className="sm:col-span-2">
+                            <label className="text-sm font-bold text-slate-700 mb-1 block">Status Manual</label>
+                            <select name="status" value={form.status} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" disabled={form.status === 'INSTALADO'}>
+                                <option value="DISPONIVEL">ESTOQUE (DISPONÍVEL)</option><option value="MANUTENCAO">EM MANUTENÇÃO</option><option value="INUTILIZADO">INUTILIZADO / SUCATA</option>
+                                {form.status === 'INSTALADO' && <option value="INSTALADO" disabled>INSTALADO EM VEÍCULO</option>}
+                            </select>
+                        </div>
+                        <div className="sm:col-span-2"><label className="text-sm font-bold text-slate-700 mb-1 block">Base (CR)</label><select name="cr" value={form.cr} onChange={handleChange} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:border-red-500 outline-none" disabled={form.status === 'INSTALADO'}>{CRS.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+                    </div>
+                    <div className="p-4 border-t flex justify-end gap-2 bg-slate-50"><button type="button" onClick={onClose} className="px-4 py-2 font-medium text-slate-600">Cancelar</button><button type="submit" className="px-5 py-2 bg-red-600 text-white font-bold rounded-lg">Salvar</button></div>
+                </form>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<AppProvider><Layout /></AppProvider>);
+    </script>
+</body>
+</html>
